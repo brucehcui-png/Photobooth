@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import { playCountdownBeep, playShutterSound } from "@/lib/audio";
-import { drawPixelArt, PixelArtPalette } from "@/lib/pixelArt";
+import { renderLivePixelFrame, PixelArtPalette } from "@/lib/pixelArt";
 
 interface CameraViewProps {
   onPhotosCaptured: (photos: string[]) => void;
@@ -25,7 +25,6 @@ export function CameraView({
   const [currentShotIndex, setCurrentShotIndex] = useState<number>(0);
   const [capturedThumbnails, setCapturedThumbnails] = useState<string[]>([]);
   const [isFlashing, setIsFlashing] = useState(false);
-  const [livePixelPreview, setLivePixelPreview] = useState<boolean>(true);
   const [activePalette, setActivePalette] = useState<PixelArtPalette>("arcade");
 
   // Initialize camera stream
@@ -89,9 +88,9 @@ export function CameraView({
     };
   }, [facingMode, startCamera]);
 
-  // Live Pixel Art preview render loop
+  // Live direct pixel art rendering loop (30 FPS)
   useEffect(() => {
-    if (!livePixelPreview || !isReady) {
+    if (!isReady) {
       if (animFrameRef.current) {
         cancelAnimationFrame(animFrameRef.current);
       }
@@ -100,8 +99,11 @@ export function CameraView({
 
     let isSubscribed = true;
     let lastRenderTime = 0;
-    const fps = 24; // 24 fps for smooth retro arcade feel while saving battery
+    const fps = 30;
     const frameInterval = 1000 / fps;
+
+    // Fixed low-res dimensions for chunky retro pixel art
+    const lowWidth = 110;
 
     const renderLoop = (time: number) => {
       if (!isSubscribed) return;
@@ -118,25 +120,23 @@ export function CameraView({
           video.videoWidth > 0 &&
           video.videoHeight > 0
         ) {
-          if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
+          const aspect = video.videoWidth / video.videoHeight;
+          const lowHeight = Math.max(1, Math.round(lowWidth / aspect));
+
+          if (canvas.width !== lowWidth || canvas.height !== lowHeight) {
+            canvas.width = lowWidth;
+            canvas.height = lowHeight;
           }
 
           const ctx = canvas.getContext("2d", { willReadFrequently: true });
           if (ctx) {
-            drawPixelArt(
+            renderLivePixelFrame(
               ctx,
               video,
-              0,
-              0,
-              canvas.width,
-              canvas.height,
-              {
-                palette: activePalette,
-                pixelSize: "classic",
-                dither: true,
-              }
+              lowWidth,
+              lowHeight,
+              activePalette,
+              true
             );
           }
         }
@@ -153,7 +153,7 @@ export function CameraView({
         cancelAnimationFrame(animFrameRef.current);
       }
     };
-  }, [livePixelPreview, isReady, activePalette]);
+  }, [isReady, activePalette]);
 
   // Capture current video frame to data URL
   const captureFrame = useCallback((): string | null => {
@@ -176,7 +176,6 @@ export function CameraView({
     return canvas.toDataURL("image/jpeg", 0.95);
   }, [facingMode]);
 
-  // Trigger haptic vibration if supported
   const triggerHaptic = (ms: number = 40) => {
     if (typeof window !== "undefined" && "vibrate" in navigator) {
       try {
@@ -188,7 +187,7 @@ export function CameraView({
   };
 
   // Run the 4-photo booth sequence
-  const startPhotoboothSequence = async () => {
+  const startPhotoboothSequence = useCallback(async () => {
     if (isShooting || !isReady) return;
 
     setIsShooting(true);
@@ -230,45 +229,66 @@ export function CameraView({
     await new Promise((r) => setTimeout(r, 400));
     setIsShooting(false);
     onPhotosCaptured(photos);
-  };
+  }, [isShooting, isReady, captureFrame, onPhotosCaptured]);
+
+  // Keyboard shortcut: Spacebar or Enter takes photos
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.code === "Space" || e.key === "Enter") && !isShooting && isReady) {
+        e.preventDefault();
+        startPhotoboothSequence();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isShooting, isReady, startPhotoboothSequence]);
 
   const toggleCamera = () => {
     if (isShooting) return;
     setFacingMode((prev) => (prev === "user" ? "environment" : "user"));
   };
 
+  const palettesList: { id: PixelArtPalette; name: string }[] = [
+    { id: "arcade", name: "16-Bit" },
+    { id: "gameboy", name: "GameBoy" },
+    { id: "cyberpunk", name: "Neon" },
+    { id: "pico8", name: "Pico-8" },
+    { id: "onebit", name: "1-Bit" },
+  ];
+
   return (
-    <div className="relative w-full h-full bg-black overflow-hidden flex flex-col justify-between select-none">
-      {/* Viewfinder: Video or Live Pixel Canvas */}
+    <div className="relative w-full h-[100dvh] bg-black overflow-hidden flex flex-col justify-between select-none">
+      {/* Viewfinder: DIRECT PIXEL VIEW */}
       <div className="absolute inset-0 w-full h-full overflow-hidden bg-black flex items-center justify-center">
-        {/* Underneath: standard video element */}
+        {/* Hidden source video element feeding the pixel renderer */}
         <video
           ref={videoRef}
           playsInline
           autoPlay
           muted
-          className={`w-full h-full object-cover ${
-            facingMode === "user" ? "scale-x-[-1]" : ""
-          } ${livePixelPreview ? "opacity-0" : isReady ? "opacity-100" : "opacity-0"}`}
+          className="absolute opacity-0 pointer-events-none w-1 h-1"
         />
 
-        {/* Live Pixel Art Viewfinder Canvas */}
-        {livePixelPreview && (
-          <canvas
-            ref={pixelCanvasRef}
-            className={`absolute inset-0 w-full h-full object-cover ${
-              facingMode === "user" ? "scale-x-[-1]" : ""
-            } ${isReady ? "opacity-100" : "opacity-0"}`}
-          />
-        )}
+        {/* Live Pixel Art Viewfinder (Always in Pixel View directly) */}
+        <canvas
+          ref={pixelCanvasRef}
+          className={`w-full h-full object-cover pixelated ${
+            facingMode === "user" ? "scale-x-[-1]" : ""
+          } ${isReady ? "opacity-100" : "opacity-0"} transition-opacity duration-300`}
+        />
 
-        {/* Loading state before camera starts */}
+        {/* Loading overlay before camera permissions/stream begins */}
         {!isReady && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center text-neutral-400 gap-3">
-            <div className="w-8 h-8 border-2 border-white/20 border-t-emerald-400 rounded-full animate-spin" />
-            <p className="text-xs font-mono tracking-widest text-emerald-400">
-              INITIALIZING PIXEL SENSOR...
-            </p>
+          <div className="absolute inset-0 flex flex-col items-center justify-center text-neutral-400 gap-4 bg-black/90 z-10 px-6 text-center">
+            <div className="w-12 h-12 border-3 border-emerald-400/30 border-t-emerald-400 rounded-full animate-spin" />
+            <div className="space-y-1">
+              <p className="text-sm font-bold font-mono tracking-wider text-emerald-400">
+                STARTING PIXEL CAMERA...
+              </p>
+              <p className="text-xs text-neutral-500 font-mono">
+                Please allow camera access when prompted
+              </p>
+            </div>
           </div>
         )}
       </div>
@@ -280,66 +300,53 @@ export function CameraView({
 
       {/* 8-Bit Countdown Overlay */}
       {countdown !== null && (
-        <div className="absolute inset-0 z-40 flex flex-col items-center justify-center bg-black/40 backdrop-blur-[2px] pointer-events-none">
+        <div className="absolute inset-0 z-40 flex flex-col items-center justify-center bg-black/50 backdrop-blur-[2px] pointer-events-none">
           <div className="relative flex items-center justify-center">
-            {/* Retro pulsing square ring */}
-            <div className="w-32 h-32 border-4 border-emerald-400/50 animate-ping absolute" />
-            <div className="w-28 h-28 bg-neutral-900/90 border-2 border-emerald-400 flex items-center justify-center shadow-2xl shadow-emerald-500/30">
-              <span className="text-6xl font-black text-emerald-400 font-mono tracking-tighter tabular-nums drop-shadow-[0_0_12px_rgba(52,211,153,0.8)]">
+            <div className="w-36 h-36 border-4 border-emerald-400/50 animate-ping absolute" />
+            <div className="w-32 h-32 bg-black/80 border-4 border-emerald-400 flex items-center justify-center shadow-2xl shadow-emerald-500/40">
+              <span className="text-7xl font-black text-emerald-400 font-mono tracking-tighter tabular-nums drop-shadow-[0_0_15px_rgba(52,211,153,0.9)]">
                 {countdown}
               </span>
             </div>
           </div>
-          <div className="mt-4 px-4 py-1 bg-black/80 border border-emerald-400/40 text-emerald-300 font-mono text-xs font-bold uppercase tracking-widest shadow-lg">
-            SHOT {currentShotIndex} OF 4
+          <div className="mt-5 px-5 py-2 bg-black border-2 border-emerald-400 text-emerald-300 font-mono text-sm font-black uppercase tracking-widest shadow-xl">
+            PHOTO {currentShotIndex} OF 4
           </div>
         </div>
       )}
 
       {/* Top Header Overlay */}
-      <header className="relative z-20 w-full flex items-center justify-between px-6 pt-safe">
+      <header className="relative z-20 w-full flex items-center justify-between px-5 pt-safe">
         {/* App Title Badge */}
-        <div className="flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-black/60 backdrop-blur-md border border-white/20 text-white shadow-lg">
+        <div className="flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-black/70 backdrop-blur-md border border-emerald-500/30 text-white shadow-lg">
           <span className="text-sm">👾</span>
-          <span className="text-xs font-bold font-mono tracking-wider uppercase text-emerald-400">
+          <span className="text-xs font-black font-mono tracking-wider uppercase text-emerald-400">
             PIXEL BOOTH
           </span>
         </div>
 
-        {/* Live Pixel Preview Mode Toggle */}
-        <button
-          type="button"
-          onClick={() => setLivePixelPreview((prev) => !prev)}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full backdrop-blur-md border text-xs font-semibold tracking-wide shadow-lg transition-all active:scale-95 ${
-            livePixelPreview
-              ? "bg-emerald-500/20 border-emerald-400 text-emerald-300"
-              : "bg-black/60 border-white/20 text-neutral-300"
-          }`}
-        >
-          <span
-            className={`w-2 h-2 rounded-full ${
-              livePixelPreview ? "bg-emerald-400 animate-pulse" : "bg-neutral-500"
-            }`}
-          />
-          Pixel Cam
-        </button>
+        {/* Live Indicator Badge */}
+        <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-black/70 backdrop-blur-md border border-white/20 text-neutral-200 text-xs font-mono font-semibold shadow-lg">
+          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+          <span>LIVE PIXELS</span>
+        </div>
       </header>
 
-      {/* Bottom Controls Area */}
-      <footer className="relative z-20 w-full flex flex-col items-center pb-safe px-6 gap-5">
+      {/* Bottom Controls Area (Pinned with high contrast & explicit labels) */}
+      <footer className="relative z-20 w-full flex flex-col items-center pb-safe px-4 gap-3 bg-gradient-to-t from-black via-black/85 to-transparent pt-6 shrink-0">
         {/* Mini 4-thumbnail progress tracker */}
-        <div className="flex items-center gap-2 px-3 py-1.5 rounded-2xl bg-black/70 backdrop-blur-md border border-white/20 shadow-xl">
+        <div className="flex items-center gap-2 px-3 py-1.5 rounded-2xl bg-black/80 backdrop-blur-md border border-white/20 shadow-xl">
           {[0, 1, 2, 3].map((idx) => {
             const hasPhoto = Boolean(capturedThumbnails[idx]);
             const isCurrent = isShooting && currentShotIndex === idx + 1;
             return (
               <div
                 key={idx}
-                className={`w-9 h-9 rounded-lg overflow-hidden border transition-all duration-300 flex items-center justify-center ${
+                className={`w-9 h-9 rounded-lg overflow-hidden border-2 transition-all duration-300 flex items-center justify-center ${
                   hasPhoto
-                    ? "border-emerald-400 bg-black shadow-sm"
+                    ? "border-emerald-400 bg-black shadow-md shadow-emerald-500/20"
                     : isCurrent
-                    ? "border-amber-400 bg-amber-400/20 scale-105"
+                    ? "border-amber-400 bg-amber-400/20 scale-110"
                     : "border-white/20 bg-white/10"
                 }`}
               >
@@ -348,7 +355,7 @@ export function CameraView({
                   <img
                     src={capturedThumbnails[idx]}
                     alt={`Thumb ${idx + 1}`}
-                    className="w-full h-full object-cover"
+                    className="w-full h-full object-cover pixelated"
                   />
                 ) : (
                   <span className="text-[11px] font-mono font-bold text-white/50">
@@ -360,58 +367,84 @@ export function CameraView({
           })}
         </div>
 
-        {/* Shutter Button & Camera Flip Control */}
-        <div className="w-full max-w-sm flex items-center justify-between px-4">
-          {/* Quick Palette Preview selector button */}
+        {/* Shutter Button & Controls Row */}
+        <div className="w-full max-w-sm flex items-center justify-between px-2 pt-1">
+          {/* Palette Switcher Button */}
           <button
             type="button"
             onClick={() => {
-              const palettes: PixelArtPalette[] = [
-                "arcade",
-                "gameboy",
-                "cyberpunk",
-                "pico8",
-                "onebit",
-              ];
-              const nextIdx = (palettes.indexOf(activePalette) + 1) % palettes.length;
-              setActivePalette(palettes[nextIdx]);
+              const ids = palettesList.map((p) => p.id);
+              const nextIdx = (ids.indexOf(activePalette) + 1) % ids.length;
+              setActivePalette(ids[nextIdx]);
             }}
-            aria-label="Cycle Pixel Palette"
-            className="w-12 h-12 rounded-full bg-black/60 backdrop-blur-md border border-white/20 text-white flex flex-col items-center justify-center active:scale-90 transition-all hover:bg-black/80"
+            aria-label="Change Pixel Color Palette"
+            className="w-14 h-14 rounded-2xl bg-neutral-900/90 border border-neutral-700/80 text-white flex flex-col items-center justify-center active:scale-95 transition-all hover:bg-neutral-800 shadow-lg"
           >
-            <span className="text-xs">🎨</span>
-            <span className="text-[9px] font-mono uppercase font-bold text-emerald-400">
-              {activePalette === "gameboy" ? "GB" : activePalette.slice(0, 3)}
+            <span className="text-base">🎨</span>
+            <span className="text-[9px] font-mono font-bold text-emerald-400 uppercase tracking-tight">
+              {palettesList.find((p) => p.id === activePalette)?.name}
             </span>
           </button>
 
-          {/* Shutter Button (Dual-ring with pixel accent) */}
-          <button
-            type="button"
-            onClick={startPhotoboothSequence}
-            disabled={!isReady || isShooting}
-            aria-label="Take Photos"
-            className="group relative flex items-center justify-center w-20 h-20 rounded-full border-4 border-white active:scale-95 transition-transform duration-150 disabled:opacity-50 disabled:active:scale-100 shadow-[0_0_20px_rgba(255,255,255,0.2)]"
-          >
-            <div
-              className={`w-[66px] h-[66px] rounded-full transition-all duration-150 ${
+          {/* MAIN SHUTTER BUTTON (Unmistakable & Prominent) */}
+          <div className="flex flex-col items-center gap-1.5">
+            <button
+              type="button"
+              onClick={startPhotoboothSequence}
+              disabled={!isReady || isShooting}
+              aria-label="Take Photos"
+              className={`group relative flex items-center justify-center w-20 h-20 rounded-full border-4 transition-all duration-200 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed ${
                 isShooting
-                  ? "bg-red-500 scale-75 rounded-md"
-                  : "bg-white group-active:scale-90"
+                  ? "border-red-500"
+                  : isReady
+                  ? "border-white animate-arcade-glow cursor-pointer"
+                  : "border-neutral-600"
               }`}
-            />
-          </button>
+            >
+              {/* Inner Button Circle */}
+              <div
+                className={`w-[64px] h-[64px] rounded-full flex items-center justify-center transition-all duration-200 ${
+                  isShooting
+                    ? "bg-red-500 scale-75 rounded-xl"
+                    : "bg-white group-active:scale-90 shadow-inner"
+                }`}
+              >
+                {!isShooting && (
+                  <span className="text-2xl select-none" role="img" aria-label="camera">
+                    📸
+                  </span>
+                )}
+              </div>
+            </button>
+
+            {/* Clear Button Text Badge */}
+            <span
+              className={`text-[11px] font-mono font-bold tracking-wider uppercase px-2.5 py-0.5 rounded-full border ${
+                isShooting
+                  ? "bg-red-500/20 border-red-500 text-red-400 animate-pulse"
+                  : isReady
+                  ? "bg-emerald-500/20 border-emerald-400 text-emerald-300 font-extrabold"
+                  : "bg-neutral-800 border-neutral-700 text-neutral-400"
+              }`}
+            >
+              {isShooting
+                ? `PHOTO ${currentShotIndex} / 4`
+                : isReady
+                ? "TAP TO SNAP"
+                : "STARTING..."}
+            </span>
+          </div>
 
           {/* Flip Camera Button */}
           <button
             type="button"
             onClick={toggleCamera}
             disabled={isShooting}
-            aria-label="Switch Camera"
-            className="w-12 h-12 rounded-full bg-black/60 backdrop-blur-md border border-white/20 text-white flex items-center justify-center active:scale-90 transition-all hover:bg-black/80 disabled:opacity-40"
+            aria-label="Flip Camera"
+            className="w-14 h-14 rounded-2xl bg-neutral-900/90 border border-neutral-700/80 text-white flex flex-col items-center justify-center active:scale-95 transition-all hover:bg-neutral-800 shadow-lg disabled:opacity-40"
           >
             <svg
-              className="w-5 h-5 text-white"
+              className="w-5 h-5 text-neutral-200"
               fill="none"
               viewBox="0 0 24 24"
               stroke="currentColor"
@@ -423,6 +456,9 @@ export function CameraView({
                 d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
               />
             </svg>
+            <span className="text-[9px] font-mono font-bold text-neutral-400 uppercase">
+              Flip
+            </span>
           </button>
         </div>
       </footer>

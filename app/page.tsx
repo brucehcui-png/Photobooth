@@ -81,7 +81,7 @@ export default function Home() {
   }, []);
 
   return (
-    <main className="fixed inset-0 w-full h-full bg-black overflow-hidden flex flex-col font-sans select-none touch-manipulation">
+    <main className="fixed inset-0 w-full h-[100dvh] bg-black overflow-hidden flex flex-col font-sans select-none touch-manipulation">
       {viewState === "camera" && (
         <CameraView
           onPhotosCaptured={handlePhotosCaptured}
