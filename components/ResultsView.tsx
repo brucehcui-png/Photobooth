@@ -120,7 +120,7 @@ export function ResultsView({ photos, onRetake }: ResultsViewProps) {
   ];
 
   return (
-    <div className="relative w-full h-[100dvh] bg-neutral-950 text-white flex flex-col justify-between overflow-hidden select-none">
+    <div className="relative w-full h-full bg-neutral-950 text-white flex flex-col justify-between overflow-hidden select-none">
       {/* Toast Notification */}
       {toastMessage && (
         <div className="absolute top-16 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full bg-emerald-400 text-black font-bold font-mono text-xs shadow-2xl backdrop-blur-md animate-bounce border border-emerald-300">

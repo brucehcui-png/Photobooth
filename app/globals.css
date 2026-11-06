@@ -29,14 +29,7 @@ body {
   user-select: none;
   -webkit-touch-callout: none;
   overscroll-behavior: none;
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", monospace, system-ui, sans-serif;
-}
-
-/* Hardware-accelerated crisp nearest-neighbor pixelated rendering */
-.pixelated {
-  image-rendering: pixelated;
-  image-rendering: -moz-crisp-edges;
-  image-rendering: crisp-edges;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", system-ui, sans-serif;
 }
 
 /* Safe area utilities */
@@ -45,7 +38,7 @@ body {
 }
 
 .pb-safe {
-  padding-bottom: max(env(safe-area-inset-bottom, 0px), 24px);
+  padding-bottom: max(env(safe-area-inset-bottom, 0px), 20px);
 }
 
 .pl-safe {
@@ -85,20 +78,6 @@ body {
 
 .animate-shutter {
   animation: shutterPress 200ms ease-out;
-}
-
-/* Glow pulse for arcade shutter button */
-@keyframes arcadeGlow {
-  0%, 100% {
-    box-shadow: 0 0 15px rgba(52, 211, 153, 0.4), 0 0 30px rgba(52, 211, 153, 0.2);
-  }
-  50% {
-    box-shadow: 0 0 25px rgba(52, 211, 153, 0.8), 0 0 50px rgba(52, 211, 153, 0.4);
-  }
-}
-
-.animate-arcade-glow {
-  animation: arcadeGlow 2s infinite ease-in-out;
 }
 
 /* Subtle photo strip paper drop shadow */

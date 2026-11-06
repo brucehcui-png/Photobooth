@@ -1,13 +1,11 @@
-// Pixel Art transformation engine with color quantization, Bayer dithering, zoom, and retro palettes
+// Pixel Art transformation engine with color quantization, Bayer dithering, and retro palettes
 
 export type PixelArtPalette =
   | "arcade"    // Vibrant 16-bit arcade color
+  | "pico8"     // Classic 16-color fantasy console
   | "gameboy"   // 4-shade Game Boy DMG-01 green LCD
   | "cyberpunk" // Neon pink, cyan, electric purple
-  | "pico8"     // Classic 16-color fantasy console
-  | "onebit"    // 1-bit monochrome Game Boy Camera dither
-  | "warm"      // Vintage warm sepia film
-  | "noir";     // Moody B&W film noir
+  | "onebit";   // 1-bit monochrome Game Boy Camera dither
 
 export type PixelSize = "fine" | "classic" | "chunky";
 
@@ -15,7 +13,6 @@ export interface PixelArtOptions {
   palette?: PixelArtPalette;
   pixelSize?: PixelSize;
   dither?: boolean;
-  zoom?: number;
 }
 
 // 4x4 Bayer Matrix for ordered dithering
@@ -32,6 +29,11 @@ const GAMEBOY_PALETTE = [
   [48, 98, 48],     // Dark green
   [139, 172, 15],   // Light green
   [155, 188, 15],   // Bright yellow-green
+];
+
+const ONEBIT_PALETTE = [
+  [12, 12, 14],     // Deep black
+  [245, 245, 250],  // Bright white
 ];
 
 const CYBERPUNK_PALETTE = [
@@ -102,9 +104,9 @@ function quantizeArcade(
   ditherVal: number
 ): [number, number, number] {
   const gray = 0.299 * r + 0.587 * g + 0.114 * b;
-  r = Math.min(255, Math.max(0, gray + (r - gray) * 1.3));
-  g = Math.min(255, Math.max(0, gray + (g - gray) * 1.3));
-  b = Math.min(255, Math.max(0, gray + (b - gray) * 1.3));
+  r = Math.min(255, Math.max(0, gray + (r - gray) * 1.25));
+  g = Math.min(255, Math.max(0, gray + (g - gray) * 1.25));
+  b = Math.min(255, Math.max(0, gray + (b - gray) * 1.25));
 
   const levels = 6;
   const step = 255 / (levels - 1);
@@ -117,136 +119,26 @@ function quantizeArcade(
   return [Math.min(255, qr), Math.min(255, qg), Math.min(255, qb)];
 }
 
-// Warm vintage sepia quantization
-function quantizeWarm(
-  r: number,
-  g: number,
-  b: number,
-  ditherVal: number
-): [number, number, number] {
-  const tr = Math.min(255, r * 1.08 + 20);
-  const tg = Math.min(255, g * 0.96 + 10);
-  const tb = Math.min(255, b * 0.82);
+// Module-level reusable offscreen mini canvas to prevent GC pressure during live video loop
+let cachedMiniCanvas: HTMLCanvasElement | null = null;
+let cachedMiniCtx: CanvasRenderingContext2D | null = null;
 
-  const levels = 5;
-  const step = 255 / (levels - 1);
-  const spread = step * 0.4;
-
-  const qr = Math.round(Math.min(255, Math.max(0, tr + ditherVal * spread)) / step) * step;
-  const qg = Math.round(Math.min(255, Math.max(0, tg + ditherVal * spread)) / step) * step;
-  const qb = Math.round(Math.min(255, Math.max(0, tb + ditherVal * spread)) / step) * step;
-
-  return [qr, qg, qb];
-}
-
-// Noir high-contrast B&W quantization
-function quantizeNoir(
-  r: number,
-  g: number,
-  b: number,
-  ditherVal: number
-): [number, number, number] {
-  let gray = 0.299 * r + 0.587 * g + 0.114 * b;
-  gray = ((gray - 128) * 1.35) + 128;
-  gray = Math.max(0, Math.min(255, gray));
-
-  const levels = 5;
-  const step = 255 / (levels - 1);
-  const spread = step * 0.45;
-  const q = Math.round(Math.min(255, Math.max(0, gray + ditherVal * spread)) / step) * step;
-  return [q, q, q];
-}
-
-/**
- * Ultra-fast live frame pixel art transformation with zoom support directly onto a low-res canvas.
- */
-export function renderLivePixelFrame(
-  ctx: CanvasRenderingContext2D,
-  video: HTMLVideoElement,
-  w: number,
-  h: number,
-  palette: PixelArtPalette = "arcade",
-  dither: boolean = true,
-  zoom: number = 1
-) {
-  const vw = video.videoWidth;
-  const vh = video.videoHeight;
-
-  // Zoom crop calculation
-  const z = Math.max(0.5, Math.min(4, zoom));
-  const sw = vw / z;
-  const sh = vh / z;
-  const sx = (vw - sw) / 2;
-  const sy = (vh - sh) / 2;
-
-  // Draw cropped video into low-res canvas
-  ctx.drawImage(video, sx, sy, sw, sh, 0, 0, w, h);
-
-  const imgData = ctx.getImageData(0, 0, w, h);
-  const data = imgData.data;
-
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const idx = (y * w + x) * 4;
-      const r = data[idx];
-      const g = data[idx + 1];
-      const b = data[idx + 2];
-
-      const ditherFactor = dither
-        ? (BAYER_4X4[y % 4][x % 4] / 16) - 0.5
-        : 0;
-
-      let pr: number, pg: number, pb: number;
-
-      if (palette === "gameboy") {
-        const spread = 45;
-        [pr, pg, pb] = findClosestPaletteColor(
-          r + ditherFactor * spread,
-          g + ditherFactor * spread,
-          b + ditherFactor * spread,
-          GAMEBOY_PALETTE
-        );
-      } else if (palette === "pico8") {
-        const spread = 35;
-        [pr, pg, pb] = findClosestPaletteColor(
-          r + ditherFactor * spread,
-          g + ditherFactor * spread,
-          b + ditherFactor * spread,
-          PICO8_PALETTE
-        );
-      } else if (palette === "cyberpunk") {
-        const spread = 40;
-        [pr, pg, pb] = findClosestPaletteColor(
-          r + ditherFactor * spread,
-          g + ditherFactor * spread,
-          b + ditherFactor * spread,
-          CYBERPUNK_PALETTE
-        );
-      } else if (palette === "onebit") {
-        const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-        const val = lum >= 128 + ditherFactor * 90 ? 250 : 15;
-        pr = val;
-        pg = val;
-        pb = val;
-      } else if (palette === "warm") {
-        [pr, pg, pb] = quantizeWarm(r, g, b, ditherFactor);
-      } else if (palette === "noir") {
-        [pr, pg, pb] = quantizeNoir(r, g, b, ditherFactor);
-      } else {
-        [pr, pg, pb] = quantizeArcade(r, g, b, ditherFactor);
-      }
-
-      data[idx] = pr;
-      data[idx + 1] = pg;
-      data[idx + 2] = pb;
-    }
+function getMiniCanvas(width: number, height: number) {
+  if (typeof document === "undefined") return null;
+  if (!cachedMiniCanvas) {
+    cachedMiniCanvas = document.createElement("canvas");
+    cachedMiniCtx = cachedMiniCanvas.getContext("2d", { willReadFrequently: true });
   }
-
-  ctx.putImageData(imgData, 0, 0);
+  if (cachedMiniCanvas.width !== width || cachedMiniCanvas.height !== height) {
+    cachedMiniCanvas.width = width;
+    cachedMiniCanvas.height = height;
+    cachedMiniCtx = cachedMiniCanvas.getContext("2d", { willReadFrequently: true });
+  }
+  return { canvas: cachedMiniCanvas, ctx: cachedMiniCtx };
 }
 
 /**
- * Transforms an image element or canvas into a high-res Pixel Art canvas
+ * Transforms an image element or canvas into pixel art on target 2D context
  */
 export function drawPixelArt(
   ctx: CanvasRenderingContext2D,
@@ -259,31 +151,31 @@ export function drawPixelArt(
 ) {
   const { palette = "arcade", pixelSize = "classic", dither = true } = options;
 
-  let blockCols = 96;
-  if (pixelSize === "fine") blockCols = 136;
-  if (pixelSize === "chunky") blockCols = 64;
+  let blockCols = 90;
+  if (pixelSize === "fine") blockCols = 130;
+  if (pixelSize === "chunky") blockCols = 54;
 
   const aspect = dWidth / dHeight;
   const lowW = blockCols;
   const lowH = Math.max(1, Math.round(lowW / aspect));
 
-  const miniCanvas = document.createElement("canvas");
-  miniCanvas.width = lowW;
-  miniCanvas.height = lowH;
-  const miniCtx = miniCanvas.getContext("2d", { willReadFrequently: true });
-  if (!miniCtx) return;
+  const mini = getMiniCanvas(lowW, lowH);
+  if (!mini || !mini.ctx) return;
+  const { canvas: miniCanvas, ctx: miniCtx } = mini;
 
+  // Draw source scaled down into low-res buffer
   miniCtx.drawImage(source, 0, 0, lowW, lowH);
 
+  // Read pixel buffer and apply color quantization & ordered dithering
   const imgData = miniCtx.getImageData(0, 0, lowW, lowH);
   const data = imgData.data;
 
   for (let y = 0; y < lowH; y++) {
     for (let x = 0; x < lowW; x++) {
       const idx = (y * lowW + x) * 4;
-      const r = data[idx];
-      const g = data[idx + 1];
-      const b = data[idx + 2];
+      let r = data[idx];
+      let g = data[idx + 1];
+      let b = data[idx + 2];
 
       const ditherFactor = dither
         ? (BAYER_4X4[y % 4][x % 4] / 16) - 0.5
@@ -293,38 +185,29 @@ export function drawPixelArt(
 
       if (palette === "gameboy") {
         const spread = 45;
-        [pr, pg, pb] = findClosestPaletteColor(
-          r + ditherFactor * spread,
-          g + ditherFactor * spread,
-          b + ditherFactor * spread,
-          GAMEBOY_PALETTE
-        );
+        const adjR = r + ditherFactor * spread;
+        const adjG = g + ditherFactor * spread;
+        const adjB = b + ditherFactor * spread;
+        [pr, pg, pb] = findClosestPaletteColor(adjR, adjG, adjB, GAMEBOY_PALETTE);
       } else if (palette === "pico8") {
         const spread = 35;
-        [pr, pg, pb] = findClosestPaletteColor(
-          r + ditherFactor * spread,
-          g + ditherFactor * spread,
-          b + ditherFactor * spread,
-          PICO8_PALETTE
-        );
+        const adjR = r + ditherFactor * spread;
+        const adjG = g + ditherFactor * spread;
+        const adjB = b + ditherFactor * spread;
+        [pr, pg, pb] = findClosestPaletteColor(adjR, adjG, adjB, PICO8_PALETTE);
       } else if (palette === "cyberpunk") {
         const spread = 40;
-        [pr, pg, pb] = findClosestPaletteColor(
-          r + ditherFactor * spread,
-          g + ditherFactor * spread,
-          b + ditherFactor * spread,
-          CYBERPUNK_PALETTE
-        );
+        const adjR = r + ditherFactor * spread;
+        const adjG = g + ditherFactor * spread;
+        const adjB = b + ditherFactor * spread;
+        [pr, pg, pb] = findClosestPaletteColor(adjR, adjG, adjB, CYBERPUNK_PALETTE);
       } else if (palette === "onebit") {
         const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-        const val = lum >= 128 + ditherFactor * 90 ? 250 : 15;
+        const threshold = 128 + ditherFactor * 90;
+        const val = lum >= threshold ? 250 : 15;
         pr = val;
         pg = val;
         pb = val;
-      } else if (palette === "warm") {
-        [pr, pg, pb] = quantizeWarm(r, g, b, ditherFactor);
-      } else if (palette === "noir") {
-        [pr, pg, pb] = quantizeNoir(r, g, b, ditherFactor);
       } else {
         [pr, pg, pb] = quantizeArcade(r, g, b, ditherFactor);
       }
@@ -337,6 +220,7 @@ export function drawPixelArt(
 
   miniCtx.putImageData(imgData, 0, 0);
 
+  // Upscale mini canvas using Nearest-Neighbor interpolation (crisp pixel blocks)
   ctx.save();
   ctx.imageSmoothingEnabled = false;
   (ctx as unknown as { webkitImageSmoothingEnabled?: boolean }).webkitImageSmoothingEnabled = false;
