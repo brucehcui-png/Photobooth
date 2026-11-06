@@ -1,7 +1,12 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  allowedDevOrigins: [
+    "10.5.10.137",
+    "10.5.10.137:3002",
+    "localhost:3002",
+    "localhost:3000",
+  ],
   cacheComponents: true,
   partialPrefetching: true,
   turbopack: {
