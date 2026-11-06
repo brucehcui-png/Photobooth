@@ -19,23 +19,34 @@ export function CameraView({
   const animFrameRef = useRef<number | null>(null);
 
   const [facingMode, setFacingMode] = useState<"user" | "environment">("user");
+  const [zoomLevel, setZoomLevel] = useState<number>(1);
   const [isReady, setIsReady] = useState(false);
   const [isShooting, setIsShooting] = useState(false);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [currentShotIndex, setCurrentShotIndex] = useState<number>(0);
   const [capturedThumbnails, setCapturedThumbnails] = useState<string[]>([]);
+  const [lastSavedPhoto, setLastSavedPhoto] = useState<string | null>(null);
   const [isFlashing, setIsFlashing] = useState(false);
-  const [activePalette, setActivePalette] = useState<PixelArtPalette>("arcade");
+  const [activePalette, setActivePalette] = useState<PixelArtPalette>("z30");
   const [flashEnabled, setFlashEnabled] = useState(true);
-  const [timerDuration, setTimerDuration] = useState<3 | 5>(3);
+  const [timerDuration, setTimerDuration] = useState<0 | 3 | 5>(0);
+  const [shootMode, setShootMode] = useState<"single" | "strip">("strip");
   const [showDateStamp, setShowDateStamp] = useState(true);
   const [showMenu, setShowMenu] = useState(false);
+  const [showPhotoModal, setShowPhotoModal] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
   const [currentTimeText, setCurrentTimeText] = useState<{ date: string; time: string }>({
     date: "06-11-2026",
     time: "< 12:00 PM",
   });
 
-  // Keep live digital clock updated for vintage timestamp
+  const showToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => setToastMessage(null), 2500);
+  };
+
+  // Live retro digital camera clock
   useEffect(() => {
     const updateTime = () => {
       const now = new Date();
@@ -119,7 +130,7 @@ export function CameraView({
     };
   }, [facingMode, startCamera]);
 
-  // Live direct pixel art rendering loop (30 FPS)
+  // Live direct pixel art rendering loop (30 FPS) with Zoom
   useEffect(() => {
     if (!isReady) {
       if (animFrameRef.current) {
@@ -165,7 +176,8 @@ export function CameraView({
               lowWidth,
               lowHeight,
               activePalette,
-              true
+              true,
+              zoomLevel
             );
           }
         }
@@ -182,28 +194,69 @@ export function CameraView({
         cancelAnimationFrame(animFrameRef.current);
       }
     };
-  }, [isReady, activePalette]);
+  }, [isReady, activePalette, zoomLevel]);
 
-  // Capture current video frame to data URL
-  const captureFrame = useCallback((): string | null => {
+  // Capture current zoomed video frame in pixel art style
+  const capturePixelPhoto = useCallback((): string | null => {
     const video = videoRef.current;
     if (!video || !video.videoWidth || !video.videoHeight) return null;
 
+    // Use high resolution canvas with pixelated rendering
     const canvas = document.createElement("canvas");
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    canvas.width = 1200;
+    canvas.height = Math.round(1200 * (video.videoHeight / video.videoWidth));
     const ctx = canvas.getContext("2d");
     if (!ctx) return null;
 
+    // Zoom crop
+    const z = Math.max(1, zoomLevel);
+    const cropW = video.videoWidth / z;
+    const cropH = video.videoHeight / z;
+    const cropX = (video.videoWidth - cropW) / 2;
+    const cropY = (video.videoHeight - cropH) / 2;
+
+    const tempCanvas = document.createElement("canvas");
+    tempCanvas.width = 120;
+    tempCanvas.height = Math.round(120 / (cropW / cropH));
+    const tempCtx = tempCanvas.getContext("2d");
+    if (!tempCtx) return null;
+
     if (facingMode === "user") {
-      ctx.translate(canvas.width, 0);
-      ctx.scale(-1, 1);
+      tempCtx.translate(tempCanvas.width, 0);
+      tempCtx.scale(-1, 1);
     }
 
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    return canvas.toDataURL("image/jpeg", 0.95);
-  }, [facingMode]);
+    renderLivePixelFrame(
+      tempCtx,
+      video,
+      tempCanvas.width,
+      tempCanvas.height,
+      activePalette,
+      true,
+      zoomLevel
+    );
 
+    // Upscale crisp pixel blocks to full canvas
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(tempCanvas, 0, 0, canvas.width, canvas.height);
+
+    // Add vintage timestamp if enabled
+    if (showDateStamp) {
+      ctx.textAlign = "right";
+      ctx.textBaseline = "bottom";
+      ctx.fillStyle = "#f5eedb";
+      ctx.font = "bold 34px monospace";
+      ctx.shadowColor = "rgba(0, 0, 0, 0.9)";
+      ctx.shadowBlur = 8;
+      ctx.fillText(currentTimeText.date, canvas.width - 35, canvas.height - 65);
+      ctx.font = "bold 28px monospace";
+      ctx.fillText(currentTimeText.time, canvas.width - 35, canvas.height - 30);
+    }
+
+    return canvas.toDataURL("image/png", 0.95);
+  }, [zoomLevel, facingMode, activePalette, showDateStamp, currentTimeText]);
+
+  // Trigger haptic vibration
   const triggerHaptic = (ms: number = 40) => {
     if (typeof window !== "undefined" && "vibrate" in navigator) {
       try {
@@ -214,146 +267,224 @@ export function CameraView({
     }
   };
 
-  // Run the 4-photo booth sequence
-  const startPhotoboothSequence = useCallback(async () => {
+  // Helper to save a photo to iPhone Photos / share sheet or download
+  const saveImageFile = async (dataUrl: string) => {
+    try {
+      const res = await fetch(dataUrl);
+      const blob = await res.blob();
+      const fileName = `ProCCD-${activePalette}-${Date.now()}.png`;
+      const file = new File([blob], fileName, { type: "image/png" });
+
+      if (
+        typeof navigator !== "undefined" &&
+        navigator.canShare &&
+        navigator.canShare({ files: [file] })
+      ) {
+        try {
+          await navigator.share({
+            files: [file],
+            title: "ProCCD Photo",
+            text: "Saved with ProCCD Pixel Camera",
+          });
+          showToast("Saved to Photos!");
+          return;
+        } catch (err: unknown) {
+          if (err instanceof Error && err.name === "AbortError") {
+            return;
+          }
+        }
+      }
+
+      // Laptop fallback: download directly
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      showToast("Downloaded!");
+    } catch (e) {
+      console.error("Save failed:", e);
+    }
+  };
+
+  // Shutter action: handles both Single Photo mode and 4-Photo Strip mode
+  const handleShutterPress = async () => {
     if (isShooting || !isReady) return;
 
     setIsShooting(true);
     setShowMenu(false);
-    setCapturedThumbnails([]);
-    const photos: string[] = [];
 
-    for (let shot = 1; shot <= 4; shot++) {
-      setCurrentShotIndex(shot);
-
-      // Countdown loop based on timerDuration
+    // Optional timer countdown (e.g. 3s or 5s)
+    if (timerDuration > 0) {
       for (let count: number = timerDuration; count >= 1; count--) {
         setCountdown(count);
         playCountdownBeep(count === 1);
         triggerHaptic(25);
         await new Promise((r) => setTimeout(r, 1000));
       }
-
       setCountdown(null);
+    }
 
-      // Flash & snap!
-      if (flashEnabled) {
-        setIsFlashing(true);
-      }
+    if (shootMode === "single") {
+      // SINGLE PHOTO MODE
+      if (flashEnabled) setIsFlashing(true);
       playShutterSound();
       triggerHaptic(60);
 
-      const photoDataUrl = captureFrame();
-      if (photoDataUrl) {
-        photos.push(photoDataUrl);
-        setCapturedThumbnails([...photos]);
+      const photoUrl = capturePixelPhoto();
+      if (photoUrl) {
+        setLastSavedPhoto(photoUrl);
+        setCapturedThumbnails([photoUrl]);
+        await saveImageFile(photoUrl);
       }
 
-      await new Promise((r) => setTimeout(r, 300));
+      await new Promise((r) => setTimeout(r, 250));
       setIsFlashing(false);
+      setIsShooting(false);
+    } else {
+      // 4-PHOTO BOOTH STRIP MODE
+      setCapturedThumbnails([]);
+      const photos: string[] = [];
 
-      if (shot < 4) {
-        await new Promise((r) => setTimeout(r, 650));
+      for (let shot = 1; shot <= 4; shot++) {
+        setCurrentShotIndex(shot);
+
+        // 3-2-1 countdown between shots
+        for (let count = 3; count >= 1; count--) {
+          setCountdown(count);
+          playCountdownBeep(count === 1);
+          triggerHaptic(25);
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+
+        setCountdown(null);
+
+        if (flashEnabled) setIsFlashing(true);
+        playShutterSound();
+        triggerHaptic(60);
+
+        const photoUrl = capturePixelPhoto();
+        if (photoUrl) {
+          photos.push(photoUrl);
+          setCapturedThumbnails([...photos]);
+          setLastSavedPhoto(photoUrl);
+        }
+
+        await new Promise((r) => setTimeout(r, 300));
+        setIsFlashing(false);
+
+        if (shot < 4) {
+          await new Promise((r) => setTimeout(r, 650));
+        }
       }
+
+      await new Promise((r) => setTimeout(r, 400));
+      setIsShooting(false);
+      onPhotosCaptured(photos);
     }
+  };
 
-    await new Promise((r) => setTimeout(r, 400));
-    setIsShooting(false);
-    onPhotosCaptured(photos);
-  }, [isShooting, isReady, timerDuration, flashEnabled, captureFrame, onPhotosCaptured]);
-
-  // Keyboard shortcut: Spacebar or Enter takes photos
+  // Keyboard shortcut: Spacebar or Enter takes photo
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.code === "Space" || e.key === "Enter") && !isShooting && isReady) {
         e.preventDefault();
-        startPhotoboothSequence();
+        handleShutterPress();
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isShooting, isReady, startPhotoboothSequence]);
+  }, [isShooting, isReady, handleShutterPress]);
 
   const toggleCamera = () => {
     if (isShooting) return;
     setFacingMode((prev) => (prev === "user" ? "environment" : "user"));
   };
 
-  const palettesList: { id: PixelArtPalette; name: string; dot: string }[] = [
-    { id: "arcade", name: "16-Bit Arcade", dot: "#38ef7d" },
-    { id: "gameboy", name: "Game Boy Classic", dot: "#8bac0f" },
-    { id: "cyberpunk", name: "Cyberpunk Neon", dot: "#f43f5e" },
-    { id: "pico8", name: "PICO-8 Fantasy", dot: "#ff77a8" },
-    { id: "onebit", name: "1-Bit Monochrome", dot: "#ffffff" },
+  const palettesList: { id: PixelArtPalette; name: string; tag: string; dot: string; desc: string }[] = [
+    { id: "z30", name: "Z30 Classic CCD", tag: "Z30", dot: "#f59e0b", desc: "Vintage 2000s digicam warm film tones" },
+    { id: "arcade", name: "16-Bit Arcade", tag: "16-BIT", dot: "#10b981", desc: "Vibrant retro SNES/arcade console color" },
+    { id: "gameboy", name: "Game Boy DMG", tag: "DMG", dot: "#8bac0f", desc: "Iconic 4-color green LCD matrix" },
+    { id: "cyberpunk", name: "Cyberpunk Neon", tag: "NEON", dot: "#ec4899", desc: "Electric magenta, cyan & synthwave" },
+    { id: "pico8", name: "PICO-8 Fantasy", tag: "PICO", dot: "#ff77a8", desc: "Charming 16-color retro console" },
+    { id: "pastel", name: "Japanese Pastel", tag: "PASTEL", dot: "#a78bfa", desc: "Soft aesthetic muted retro tones" },
+    { id: "onebit", name: "1-Bit Monochrome", tag: "1-BIT", dot: "#ffffff", desc: "Game Boy Camera high-contrast dither" },
   ];
 
   return (
-    <div className="relative w-full h-[100dvh] bg-[#000000] text-white flex flex-col justify-between items-center select-none overflow-hidden font-sans">
-      {/* Hidden source video feeding the pixel engine */}
+    <div className="fixed inset-0 w-full h-[100dvh] max-h-[100dvh] bg-[#000000] text-white flex flex-col justify-between items-center select-none overflow-hidden font-sans">
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div className="absolute top-14 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full bg-emerald-400 text-black font-mono font-bold text-xs shadow-2xl backdrop-blur-md animate-bounce border border-emerald-300">
+          {toastMessage}
+        </div>
+      )}
+
+      {/* OFFSCREEN SOURCE VIDEO: Absolutely prevents Safari from showing native media player / pause overlay */}
       <video
         ref={videoRef}
         playsInline
-        autoPlay
         muted
-        className="absolute opacity-0 pointer-events-none w-1 h-1"
+        autoPlay
+        controls={false}
+        disablePictureInPicture
+        disableRemotePlayback
+        style={{
+          position: "fixed",
+          top: "-9999px",
+          left: "-9999px",
+          width: "1px",
+          height: "1px",
+          opacity: 0,
+          pointerEvents: "none",
+        }}
       />
 
       {/* TOP STATUS BAR (ProCCD style) */}
-      <header className="w-full flex items-center justify-between px-6 pt-safe pb-1 z-30 shrink-0">
-        {/* Settings Gear Button */}
+      <header className="w-full max-w-[390px] flex items-center justify-between px-6 pt-safe pb-1 z-30 shrink-0">
+        {/* Settings Button */}
         <button
           type="button"
           onClick={() => setShowMenu((prev) => !prev)}
           className="w-9 h-9 rounded-full bg-neutral-800/80 border border-neutral-700/60 flex items-center justify-center text-neutral-300 active:scale-95 transition-transform"
           aria-label="Settings"
         >
-          <svg
-            className="w-4 h-4 text-neutral-300"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            strokeWidth={2}
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
-            />
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
-            />
+          <svg className="w-4 h-4 text-neutral-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
           </svg>
         </button>
 
-        {/* Center Camera Tally / Privacy LED Indicator */}
+        {/* Center Camera Tally LED */}
         <div className="flex items-center gap-1.5">
           <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-[0_0_8px_#34d399] animate-pulse" />
         </div>
 
-        {/* Right battery/mode badge */}
-        <div className="text-[11px] font-mono font-bold text-neutral-400 px-2 py-0.5 rounded bg-neutral-900 border border-neutral-800">
+        {/* Right Badge */}
+        <div className="text-[10px] font-mono font-bold text-neutral-400 px-2 py-0.5 rounded bg-neutral-900 border border-neutral-800">
           PRO CCD
         </div>
       </header>
 
-      {/* POPUP PALETTE MENU */}
+      {/* POPUP FILTER DRAWER (When MENU or mini-camera is tapped) */}
       {showMenu && (
-        <div className="absolute top-16 left-6 right-6 z-50 bg-neutral-900/95 border border-neutral-700/80 rounded-2xl p-4 shadow-2xl backdrop-blur-xl animate-in fade-in zoom-in-95">
+        <div className="absolute inset-x-4 top-16 z-50 bg-neutral-900/95 border border-neutral-700/80 rounded-3xl p-5 shadow-2xl backdrop-blur-2xl animate-in fade-in zoom-in-95 max-w-sm mx-auto">
           <div className="flex items-center justify-between pb-3 border-b border-neutral-800 mb-3">
-            <span className="text-xs font-mono font-bold uppercase tracking-wider text-neutral-300">
-              CCD Sensor Palettes
+            <span className="text-xs font-mono font-bold uppercase tracking-wider text-neutral-200">
+              Select CCD Filter / Sensor
             </span>
             <button
               type="button"
               onClick={() => setShowMenu(false)}
-              className="text-xs text-neutral-400 font-bold px-2 py-1"
+              className="w-7 h-7 rounded-full bg-neutral-800 flex items-center justify-center text-xs text-neutral-300 font-bold active:scale-90"
             >
               ✕
             </button>
           </div>
-          <div className="grid grid-cols-1 gap-1.5">
+          <div className="grid grid-cols-1 gap-2 max-h-[50vh] overflow-y-auto">
             {palettesList.map((p) => {
               const active = activePalette === p.id;
               return (
@@ -364,20 +495,28 @@ export function CameraView({
                     setActivePalette(p.id);
                     setShowMenu(false);
                   }}
-                  className={`flex items-center justify-between px-3 py-2 rounded-xl text-xs font-mono transition-all ${
+                  className={`flex items-center justify-between p-3 rounded-2xl text-xs font-mono transition-all text-left ${
                     active
-                      ? "bg-neutral-800 text-white font-bold border border-emerald-500/50"
-                      : "text-neutral-400 hover:text-white"
+                      ? "bg-neutral-800 text-white font-bold border-2 border-emerald-400 shadow-md"
+                      : "bg-neutral-950/60 text-neutral-300 hover:bg-neutral-800/60 border border-neutral-800"
                   }`}
                 >
-                  <span className="flex items-center gap-2">
+                  <div className="flex items-center gap-3">
                     <span
-                      className="w-2.5 h-2.5 rounded-full"
+                      className="w-4 h-4 rounded-full shrink-0 shadow-sm"
                       style={{ backgroundColor: p.dot }}
                     />
-                    {p.name}
-                  </span>
-                  {active && <span className="text-emerald-400">✓</span>}
+                    <div>
+                      <div className="font-bold text-white flex items-center gap-1.5">
+                        {p.name}
+                        <span className="text-[9px] px-1.5 py-0.2 rounded bg-neutral-800 text-neutral-400">
+                          {p.tag}
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-neutral-400 mt-0.5">{p.desc}</div>
+                    </div>
+                  </div>
+                  {active && <span className="text-emerald-400 font-bold text-base">✓</span>}
                 </button>
               );
             })}
@@ -386,9 +525,9 @@ export function CameraView({
       )}
 
       {/* MAIN FRAMED LCD VIEWFINDER SCREEN (ProCCD style) */}
-      <div className="relative w-full max-w-[390px] flex-1 max-h-[58vh] min-h-[310px] mx-auto px-4 flex items-center justify-center">
-        <div className="relative w-full h-full rounded-[28px] overflow-hidden bg-neutral-950 border border-neutral-800 shadow-[0_12px_40px_rgba(0,0,0,0.9),inset_0_1px_1px_rgba(255,255,255,0.1)] flex items-center justify-center">
-          {/* Live Pixel Art Viewfinder directly on the screen */}
+      <div className="relative w-full max-w-[390px] flex-1 min-h-0 mx-auto px-4 flex items-center justify-center">
+        <div className="relative w-full h-full max-h-[56dvh] rounded-[28px] overflow-hidden bg-neutral-950 border border-neutral-800 shadow-[0_12px_40px_rgba(0,0,0,0.9),inset_0_1px_1px_rgba(255,255,255,0.1)] flex items-center justify-center">
+          {/* Live Pixel Art Viewfinder (Directly on screen with nearest-neighbor scaling) */}
           <canvas
             ref={pixelCanvasRef}
             className={`w-full h-full object-cover pixelated ${
@@ -396,17 +535,17 @@ export function CameraView({
             } ${isReady ? "opacity-100" : "opacity-0"} transition-opacity duration-300`}
           />
 
-          {/* Loading overlay */}
+          {/* Loading state */}
           {!isReady && (
             <div className="absolute inset-0 flex flex-col items-center justify-center text-neutral-400 gap-3 bg-black/90 z-10 px-6 text-center">
               <div className="w-10 h-10 border-2 border-emerald-400/30 border-t-emerald-400 rounded-full animate-spin" />
               <p className="text-xs font-mono font-bold tracking-widest text-emerald-400">
-                LOADING CCD SENSOR...
+                STARTING CCD SENSOR...
               </p>
             </div>
           )}
 
-          {/* Screen White Flash */}
+          {/* Screen Flash Animation */}
           {isFlashing && (
             <div className="absolute inset-0 bg-white z-50 animate-flash pointer-events-none" />
           )}
@@ -416,31 +555,58 @@ export function CameraView({
             <div className="absolute inset-0 z-40 flex flex-col items-center justify-center bg-black/40 backdrop-blur-[2px] pointer-events-none">
               <div className="relative flex items-center justify-center">
                 <div className="w-32 h-32 border-4 border-emerald-400/50 animate-ping absolute" />
-                <div className="w-28 h-28 bg-black/80 border-4 border-emerald-400 flex items-center justify-center shadow-2xl shadow-emerald-500/40 rounded-2xl">
+                <div className="w-28 h-28 bg-black/85 border-4 border-emerald-400 flex items-center justify-center shadow-2xl shadow-emerald-500/40 rounded-2xl">
                   <span className="text-6xl font-black text-emerald-400 font-mono tracking-tighter tabular-nums drop-shadow-[0_0_15px_rgba(52,211,153,0.9)]">
                     {countdown}
                   </span>
                 </div>
               </div>
-              <div className="mt-4 px-4 py-1.5 bg-black border-2 border-emerald-400 text-emerald-300 font-mono text-xs font-black uppercase tracking-widest shadow-xl rounded-lg">
-                PHOTO {currentShotIndex} OF 4
-              </div>
+              {shootMode === "strip" && (
+                <div className="mt-4 px-4 py-1.5 bg-black border-2 border-emerald-400 text-emerald-300 font-mono text-xs font-black uppercase tracking-widest shadow-xl rounded-lg">
+                  PHOTO {currentShotIndex} OF 4
+                </div>
+              )}
             </div>
           )}
 
-          {/* ProCCD Top Left Status badge inside viewfinder */}
-          <div className="absolute top-3 left-3 flex items-center gap-1.5 px-2 py-0.5 rounded bg-black/50 backdrop-blur-sm border border-white/10 text-[10px] font-mono text-neutral-300 pointer-events-none">
-            <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
-            <span>4-SHOT STRIP</span>
+          {/* Top-Left Active Filter & Mode Tag inside Viewfinder */}
+          <div className="absolute top-3 left-3 flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-black/60 backdrop-blur-md border border-white/10 text-[10px] font-mono font-bold text-neutral-200 pointer-events-none z-10">
+            <span
+              className="w-2 h-2 rounded-full"
+              style={{
+                backgroundColor: palettesList.find((p) => p.id === activePalette)?.dot || "#34d399",
+              }}
+            />
+            <span>{palettesList.find((p) => p.id === activePalette)?.tag}</span>
+            <span className="text-white/40">•</span>
+            <span className="text-emerald-400 uppercase">{shootMode}</span>
           </div>
 
-          {/* ProCCD VINTAGE DIGITAL CAMERA TIMESTAMP (Bottom Right) */}
+          {/* LENS ZOOM IN / OUT BUTTONS (ProCCD style) */}
+          <div className="absolute bottom-3 left-3 flex items-center gap-1 bg-black/60 backdrop-blur-md border border-white/15 p-1 rounded-full z-20">
+            {[1, 2, 3].map((z) => (
+              <button
+                key={z}
+                type="button"
+                onClick={() => setZoomLevel(z)}
+                className={`w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-mono font-black transition-all active:scale-90 ${
+                  zoomLevel === z
+                    ? "bg-white text-black shadow-md scale-105"
+                    : "text-white/70 hover:text-white"
+                }`}
+              >
+                {z}x
+              </button>
+            ))}
+          </div>
+
+          {/* VINTAGE DIGITAL CAMERA TIMESTAMP (Bottom-Right inside LCD) */}
           {showDateStamp && (
             <div className="absolute bottom-3 right-3 text-right pointer-events-none select-none font-mono z-10 leading-none">
-              <div className="text-[14px] font-black text-[#f5eedb] tracking-wider drop-shadow-[0_2px_4px_rgba(0,0,0,0.95)]">
+              <div className="text-[13px] font-black text-[#f5eedb] tracking-wider drop-shadow-[0_2px_4px_rgba(0,0,0,0.95)]">
                 {currentTimeText.date}
               </div>
-              <div className="text-[11px] font-bold text-[#f5eedb]/90 tracking-wide mt-1 drop-shadow-[0_2px_4px_rgba(0,0,0,0.95)]">
+              <div className="text-[10px] font-bold text-[#f5eedb]/90 tracking-wide mt-1 drop-shadow-[0_2px_4px_rgba(0,0,0,0.95)]">
                 {currentTimeText.time}
               </div>
             </div>
@@ -449,12 +615,12 @@ export function CameraView({
       </div>
 
       {/* MIDDLE TOOLBAR STRIP (ProCCD style icon row) */}
-      <div className="w-full max-w-[390px] flex items-center justify-around px-4 py-3 shrink-0 text-white z-20">
+      <div className="w-full max-w-[390px] flex items-center justify-around px-4 py-2 shrink-0 text-white z-20">
         {/* Flash Toggle */}
         <button
           type="button"
           onClick={() => setFlashEnabled((prev) => !prev)}
-          className={`flex flex-col items-center justify-center p-1 active:scale-90 transition-transform ${
+          className={`p-1.5 active:scale-90 transition-transform ${
             flashEnabled ? "text-white" : "text-neutral-500"
           }`}
           aria-label="Toggle Flash"
@@ -471,27 +637,29 @@ export function CameraView({
           </svg>
         </button>
 
-        {/* Timer Toggle */}
+        {/* Timer Toggle (Off -> 3s -> 5s) */}
         <button
           type="button"
-          onClick={() => setTimerDuration((prev) => (prev === 3 ? 5 : 3))}
-          className="flex items-center gap-0.5 text-xs font-mono font-bold text-neutral-300 active:scale-90 transition-transform"
+          onClick={() =>
+            setTimerDuration((prev) => (prev === 0 ? 3 : prev === 3 ? 5 : 0))
+          }
+          className="flex items-center gap-0.5 text-xs font-mono font-bold text-neutral-300 active:scale-90 transition-transform p-1.5"
           aria-label="Toggle Timer"
         >
           <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <circle cx="12" cy="12" r="9" />
             <path strokeLinecap="round" d="M12 7v5l3 3" />
           </svg>
-          <span className="text-[10px]">{timerDuration}S</span>
+          <span className="text-[10px]">{timerDuration === 0 ? "OFF" : `${timerDuration}s`}</span>
         </button>
 
-        {/* Flip Camera */}
+        {/* Flip Camera Button (Front ↔️ Back) */}
         <button
           type="button"
           onClick={toggleCamera}
           disabled={isShooting}
-          className="p-1 active:scale-90 transition-transform text-white disabled:opacity-40"
-          aria-label="Switch Camera"
+          className="p-1.5 active:scale-90 transition-transform text-white disabled:opacity-40"
+          aria-label="Flip Camera"
         >
           <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path
@@ -502,23 +670,35 @@ export function CameraView({
           </svg>
         </button>
 
-        {/* MENU button */}
+        {/* MENU Filter Button */}
         <button
           type="button"
           onClick={() => setShowMenu((prev) => !prev)}
-          className="px-1.5 py-0.5 border border-white/80 rounded text-[10px] font-mono font-bold tracking-tight text-white active:scale-90 transition-transform"
+          className="px-2 py-0.5 border border-white/80 rounded text-[10px] font-mono font-bold tracking-tight text-white active:scale-90 transition-transform hover:bg-white hover:text-black"
         >
           MENU
         </button>
 
-        {/* Strip Film Frame Icon */}
-        <div className="flex items-center p-1 text-emerald-400" title="4-Photo Strip Mode">
-          <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+        {/* Shoot Mode Toggle (Single vs 4-Photo Strip) */}
+        <button
+          type="button"
+          onClick={() =>
+            setShootMode((prev) => (prev === "strip" ? "single" : "strip"))
+          }
+          className={`flex items-center gap-1 p-1.5 rounded-lg border text-[10px] font-mono font-bold active:scale-90 transition-transform ${
+            shootMode === "strip"
+              ? "border-emerald-400 text-emerald-300 bg-emerald-500/10"
+              : "border-neutral-700 text-neutral-400"
+          }`}
+          title="Toggle Single Photo or 4-Photo Strip"
+        >
+          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
             <rect x="3" y="3" width="18" height="18" rx="2" />
             <line x1="9" y1="3" x2="9" y2="21" strokeDasharray="2 2" />
             <line x1="15" y1="3" x2="15" y2="21" strokeDasharray="2 2" />
           </svg>
-        </div>
+          <span>{shootMode === "strip" ? "STRIP" : "SINGLE"}</span>
+        </button>
 
         {/* Date Stamp Toggle [D] */}
         <button
@@ -534,24 +714,25 @@ export function CameraView({
       </div>
 
       {/* LOWER CAMERA DECK (ProCCD Shutter & Widget Deck) */}
-      <footer className="w-full max-w-[390px] flex flex-col items-center pb-safe px-6 gap-3 shrink-0 z-20">
+      <footer className="w-full max-w-[390px] flex flex-col items-center pb-safe px-6 gap-2 shrink-0 z-20">
         <div className="w-full flex items-center justify-between">
-          {/* LEFT: Retro Point-and-Shoot Mini Camera Graphic */}
+          {/* LEFT: Retro Point-and-Shoot Mini Camera Widget */}
           <div className="flex flex-col items-center">
-            {/* Green Power LED */}
             <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_#34d399] mb-1" />
-            <div
+            <button
+              type="button"
               onClick={() => setShowMenu(true)}
-              className="w-16 h-12 rounded-lg bg-gradient-to-b from-[#a3e635] via-[#84cc16] to-[#65a30d] p-1 border border-[#bef264] shadow-md flex items-center justify-center cursor-pointer active:scale-95 transition-transform"
+              className="w-16 h-12 rounded-xl bg-gradient-to-b from-[#a3e635] via-[#84cc16] to-[#65a30d] p-1 border border-[#bef264] shadow-md flex items-center justify-center active:scale-95 transition-transform"
+              aria-label="Filter Selector"
             >
               <div className="w-8 h-8 rounded-full bg-gradient-to-b from-neutral-200 to-neutral-400 p-[2px] shadow-inner flex items-center justify-center">
                 <div className="w-6 h-6 rounded-full bg-neutral-900 border border-neutral-600 flex items-center justify-center">
                   <div className="w-2.5 h-2.5 rounded-full bg-blue-500/40 border border-blue-300/60" />
                 </div>
               </div>
-            </div>
+            </button>
             <span className="text-[9px] font-mono text-neutral-400 mt-1 uppercase font-semibold">
-              EX-CCD
+              FILTERS
             </span>
           </div>
 
@@ -559,10 +740,10 @@ export function CameraView({
           <div className="flex flex-col items-center">
             <button
               type="button"
-              onClick={startPhotoboothSequence}
+              onClick={handleShutterPress}
               disabled={!isReady || isShooting}
-              aria-label="Take Photos"
-              className={`relative w-[84px] h-[84px] rounded-full p-[4px] bg-gradient-to-b from-neutral-700 via-neutral-900 to-black shadow-[0_8px_25px_rgba(0,0,0,0.9),inset_0_1px_2px_rgba(255,255,255,0.25)] active:scale-95 transition-all duration-150 disabled:opacity-50 ${
+              aria-label="Take Photo"
+              className={`relative w-[86px] h-[86px] rounded-full p-[4px] bg-gradient-to-b from-neutral-700 via-neutral-900 to-black shadow-[0_8px_25px_rgba(0,0,0,0.9),inset_0_1px_2px_rgba(255,255,255,0.25)] active:scale-95 transition-all duration-150 disabled:opacity-50 cursor-pointer ${
                 isShooting ? "scale-95" : ""
               }`}
             >
@@ -574,7 +755,6 @@ export function CameraView({
                     : "bg-gradient-to-b from-[#ffffff] via-[#e2e5e9] to-[#9ea5ad]"
                 }`}
               >
-                {/* Center dot-matrix ProCCD style label */}
                 <span
                   className={`font-mono text-xs font-black tracking-wider uppercase select-none ${
                     isShooting
@@ -582,31 +762,38 @@ export function CameraView({
                       : "text-neutral-600 drop-shadow-[0_1px_0_rgba(255,255,255,0.8)]"
                   }`}
                 >
-                  {isShooting ? `${currentShotIndex}/4` : "ProCCD"}
+                  {isShooting ? (shootMode === "strip" ? `${currentShotIndex}/4` : "...") : "ProCCD"}
                 </span>
               </div>
             </button>
           </div>
 
-          {/* RIGHT: Photo Album Squircle Preview Thumbnail */}
+          {/* RIGHT: Photo Album Squircle Thumbnail */}
           <div className="flex flex-col items-center">
-            <div className="w-14 h-14 rounded-2xl bg-neutral-900 border-2 border-neutral-700 shadow-md overflow-hidden flex items-center justify-center">
-              {capturedThumbnails.length > 0 ? (
+            <button
+              type="button"
+              onClick={() => {
+                if (lastSavedPhoto) setShowPhotoModal(true);
+              }}
+              className="w-14 h-14 rounded-2xl bg-neutral-900 border-2 border-neutral-700 shadow-md overflow-hidden flex items-center justify-center active:scale-95 transition-transform"
+              aria-label="View Saved Photos"
+            >
+              {lastSavedPhoto ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
-                  src={capturedThumbnails[capturedThumbnails.length - 1]}
+                  src={lastSavedPhoto}
                   alt="Recent Shot"
                   className="w-full h-full object-cover pixelated"
                 />
               ) : (
                 <div className="w-full h-full flex flex-col items-center justify-center text-neutral-600 text-[10px] font-mono">
-                  <span>🎞️</span>
-                  <span>STRIP</span>
+                  <span>🖼️</span>
+                  <span>ALBUM</span>
                 </div>
               )}
-            </div>
+            </button>
             <span className="text-[9px] font-mono text-neutral-400 mt-1 uppercase font-semibold">
-              4 SHOTS
+              ALBUM
             </span>
           </div>
         </div>
@@ -617,9 +804,16 @@ export function CameraView({
             <circle cx="12" cy="12" r="3" />
             <path strokeLinecap="round" strokeLinejoin="round" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
           </svg>
-          <div className="w-28 h-6 rounded-full bg-neutral-900 border border-neutral-700 p-0.5 flex items-center">
-            <div className="w-14 h-full rounded-full bg-gradient-to-b from-neutral-200 to-neutral-400 shadow flex items-center justify-center text-[9px] font-mono font-bold text-neutral-800">
-              BOOTH
+          <div
+            onClick={() => setShootMode((prev) => (prev === "strip" ? "single" : "strip"))}
+            className="w-32 h-6 rounded-full bg-neutral-900 border border-neutral-700 p-0.5 flex items-center cursor-pointer relative"
+          >
+            <div
+              className={`w-16 h-full rounded-full bg-gradient-to-b from-neutral-200 to-neutral-400 shadow flex items-center justify-center text-[9px] font-mono font-bold text-neutral-800 transition-all duration-200 ${
+                shootMode === "strip" ? "translate-x-14" : "translate-x-0"
+              }`}
+            >
+              {shootMode === "strip" ? "STRIP" : "PHOTO"}
             </div>
           </div>
           <svg className="w-4 h-4 text-neutral-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -627,6 +821,47 @@ export function CameraView({
           </svg>
         </div>
       </footer>
+
+      {/* PHOTO ALBUM MODAL (Opens when tapping the bottom-right squircle) */}
+      {showPhotoModal && lastSavedPhoto && (
+        <div className="fixed inset-0 z-50 bg-black/95 flex flex-col justify-between items-center p-6 animate-in fade-in">
+          <div className="w-full flex items-center justify-between pt-safe">
+            <button
+              type="button"
+              onClick={() => setShowPhotoModal(false)}
+              className="px-4 py-2 rounded-full bg-neutral-900 text-white font-mono text-xs font-bold border border-neutral-700"
+            >
+              ✕ Close
+            </button>
+            <span className="font-mono text-xs font-bold text-emerald-400 uppercase">
+              ProCCD Photo
+            </span>
+            <div className="w-12" />
+          </div>
+
+          <div className="flex-1 w-full flex items-center justify-center my-4 overflow-hidden">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={lastSavedPhoto}
+              alt="Saved Shot"
+              className="max-h-[65vh] w-auto rounded-2xl border-2 border-white/20 shadow-2xl pixelated object-contain"
+            />
+          </div>
+
+          <div className="w-full max-w-sm flex items-center gap-3 pb-safe">
+            <button
+              type="button"
+              onClick={() => saveImageFile(lastSavedPhoto)}
+              className="w-full py-3.5 px-6 rounded-2xl bg-white text-black font-mono font-black text-sm active:scale-98 transition-all shadow-xl hover:bg-neutral-100 flex items-center justify-center gap-2"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.4}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+              </svg>
+              Save to Photos / Share
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

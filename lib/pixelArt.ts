@@ -1,11 +1,13 @@
-// Pixel Art transformation engine with color quantization, Bayer dithering, and retro palettes
+// Pixel Art transformation engine with color quantization, Bayer dithering, and retro CCD palettes
 
 export type PixelArtPalette =
+  | "z30"       // Vintage 2000s CCD warm sensor look
   | "arcade"    // Vibrant 16-bit arcade color
-  | "pico8"     // Classic 16-color fantasy console
   | "gameboy"   // 4-shade Game Boy DMG-01 green LCD
   | "cyberpunk" // Neon pink, cyan, electric purple
-  | "onebit";   // 1-bit monochrome Game Boy Camera dither
+  | "pico8"     // Classic 16-color fantasy console
+  | "onebit"    // 1-bit monochrome Game Boy Camera dither
+  | "pastel";   // Japanese soft pastel retro camera
 
 export type PixelSize = "fine" | "classic" | "chunky";
 
@@ -62,6 +64,19 @@ const PICO8_PALETTE = [
   [255, 204, 170],  // 15 peach
 ];
 
+const PASTEL_PALETTE = [
+  [38, 35, 53],
+  [94, 84, 110],
+  [156, 137, 168],
+  [224, 195, 206],
+  [247, 226, 226],
+  [255, 250, 244],
+  [184, 216, 216],
+  [122, 168, 178],
+  [243, 176, 158],
+  [234, 126, 142],
+];
+
 // Helper to find closest color in a fixed palette with dithering offset
 function findClosestPaletteColor(
   r: number,
@@ -91,6 +106,29 @@ function findClosestPaletteColor(
   return [bestColor[0], bestColor[1], bestColor[2]];
 }
 
+// Vintage 2000s ProCCD Z30 sensor simulation
+function quantizeZ30(
+  r: number,
+  g: number,
+  b: number,
+  ditherVal: number
+): [number, number, number] {
+  // Warm CCD color response: slight green-gold bias & film contrast
+  const tr = Math.min(255, r * 1.08 + 10);
+  const tg = Math.min(255, g * 1.02 + 4);
+  const tb = Math.min(255, b * 0.92);
+
+  const levels = 8;
+  const step = 255 / (levels - 1);
+  const spread = step * 0.4;
+
+  const qr = Math.round(Math.min(255, Math.max(0, tr + ditherVal * spread)) / step) * step;
+  const qg = Math.round(Math.min(255, Math.max(0, tg + ditherVal * spread)) / step) * step;
+  const qb = Math.round(Math.min(255, Math.max(0, tb + ditherVal * spread)) / step) * step;
+
+  return [qr, qg, qb];
+}
+
 // 16-bit arcade color quantization with Bayer dithering
 function quantizeArcade(
   r: number,
@@ -115,19 +153,26 @@ function quantizeArcade(
 }
 
 /**
- * Ultra-fast live frame pixel art transformation directly onto a low-res canvas.
- * Takes ~0.5ms on a 120x90 canvas.
+ * Ultra-fast live frame pixel art transformation with zoom cropping support.
  */
 export function renderLivePixelFrame(
   ctx: CanvasRenderingContext2D,
   video: HTMLVideoElement,
   w: number,
   h: number,
-  palette: PixelArtPalette = "arcade",
-  dither: boolean = true
+  palette: PixelArtPalette = "z30",
+  dither: boolean = true,
+  zoom: number = 1
 ) {
-  // Draw video scaled down into low-res canvas
-  ctx.drawImage(video, 0, 0, w, h);
+  // Zoom cropping calculation
+  const z = Math.max(1, zoom);
+  const cropW = video.videoWidth / z;
+  const cropH = video.videoHeight / z;
+  const cropX = (video.videoWidth - cropW) / 2;
+  const cropY = (video.videoHeight - cropH) / 2;
+
+  // Draw zoomed portion into low-res canvas
+  ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, w, h);
 
   const imgData = ctx.getImageData(0, 0, w, h);
   const data = imgData.data;
@@ -145,7 +190,9 @@ export function renderLivePixelFrame(
 
       let pr: number, pg: number, pb: number;
 
-      if (palette === "gameboy") {
+      if (palette === "z30") {
+        [pr, pg, pb] = quantizeZ30(r, g, b, ditherFactor);
+      } else if (palette === "gameboy") {
         const spread = 45;
         [pr, pg, pb] = findClosestPaletteColor(
           r + ditherFactor * spread,
@@ -169,6 +216,14 @@ export function renderLivePixelFrame(
           b + ditherFactor * spread,
           CYBERPUNK_PALETTE
         );
+      } else if (palette === "pastel") {
+        const spread = 35;
+        [pr, pg, pb] = findClosestPaletteColor(
+          r + ditherFactor * spread,
+          g + ditherFactor * spread,
+          b + ditherFactor * spread,
+          PASTEL_PALETTE
+        );
       } else if (palette === "onebit") {
         const lum = 0.299 * r + 0.587 * g + 0.114 * b;
         const val = lum >= 128 + ditherFactor * 90 ? 250 : 15;
@@ -176,6 +231,7 @@ export function renderLivePixelFrame(
         pg = val;
         pb = val;
       } else {
+        // arcade
         [pr, pg, pb] = quantizeArcade(r, g, b, ditherFactor);
       }
 
@@ -189,7 +245,7 @@ export function renderLivePixelFrame(
 }
 
 /**
- * Transforms an image element or canvas into pixel art on target 2D context
+ * Transforms an image element or canvas into pixel art on target 2D context with zoom support.
  */
 export function drawPixelArt(
   ctx: CanvasRenderingContext2D,
@@ -200,7 +256,7 @@ export function drawPixelArt(
   dHeight: number,
   options: PixelArtOptions = {}
 ) {
-  const { palette = "arcade", pixelSize = "classic", dither = true } = options;
+  const { palette = "z30", pixelSize = "classic", dither = true } = options;
 
   let blockCols = 90;
   if (pixelSize === "fine") blockCols = 130;
@@ -234,7 +290,9 @@ export function drawPixelArt(
 
       let pr: number, pg: number, pb: number;
 
-      if (palette === "gameboy") {
+      if (palette === "z30") {
+        [pr, pg, pb] = quantizeZ30(r, g, b, ditherFactor);
+      } else if (palette === "gameboy") {
         const spread = 45;
         [pr, pg, pb] = findClosestPaletteColor(
           r + ditherFactor * spread,
@@ -257,6 +315,14 @@ export function drawPixelArt(
           g + ditherFactor * spread,
           b + ditherFactor * spread,
           CYBERPUNK_PALETTE
+        );
+      } else if (palette === "pastel") {
+        const spread = 35;
+        [pr, pg, pb] = findClosestPaletteColor(
+          r + ditherFactor * spread,
+          g + ditherFactor * spread,
+          b + ditherFactor * spread,
+          PASTEL_PALETTE
         );
       } else if (palette === "onebit") {
         const lum = 0.299 * r + 0.587 * g + 0.114 * b;

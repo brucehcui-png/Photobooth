@@ -10,7 +10,7 @@ interface ResultsViewProps {
 }
 
 export function ResultsView({ photos, onRetake }: ResultsViewProps) {
-  const [palette, setPalette] = useState<PixelArtPalette>("arcade");
+  const [palette, setPalette] = useState<PixelArtPalette>("z30");
   const [pixelSize, setPixelSize] = useState<PixelSize>("classic");
   const [dither, setDither] = useState<boolean>(true);
   const [stripColor, setStripColor] = useState<"white" | "black">("white");
@@ -106,10 +106,12 @@ export function ResultsView({ photos, onRetake }: ResultsViewProps) {
   };
 
   const palettes: { id: PixelArtPalette; label: string; icon: string }[] = [
+    { id: "z30", label: "Z30 CCD", icon: "📷" },
     { id: "arcade", label: "16-Bit", icon: "🕹️" },
     { id: "gameboy", label: "Game Boy", icon: "👾" },
-    { id: "cyberpunk", label: "Cyberpunk", icon: "⚡" },
+    { id: "cyberpunk", label: "Neon", icon: "⚡" },
     { id: "pico8", label: "PICO-8", icon: "🎮" },
+    { id: "pastel", label: "Pastel", icon: "🌸" },
     { id: "onebit", label: "1-Bit", icon: "🖨️" },
   ];
 
