@@ -35,6 +35,7 @@ export function CameraView({
   const [showMenu, setShowMenu] = useState(false);
   const [showPhotoModal, setShowPhotoModal] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [showInstallBanner, setShowInstallBanner] = useState(false);
 
   const [currentTimeText, setCurrentTimeText] = useState<{ date: string; time: string }>({
     date: "06-11-2026",
@@ -45,6 +46,18 @@ export function CameraView({
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 2500);
   };
+
+  // Check if running inside Safari browser (not yet added to Home Screen)
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const isStandalone =
+        (window.navigator as unknown as { standalone?: boolean }).standalone ||
+        window.matchMedia("(display-mode: standalone)").matches;
+      if (!isStandalone) {
+        setShowInstallBanner(true);
+      }
+    }
+  }, []);
 
   // Live retro digital camera clock
   useEffect(() => {
@@ -130,6 +143,25 @@ export function CameraView({
     };
   }, [facingMode, startCamera]);
 
+  // Handle hardware & software camera zoom
+  const handleZoomChange = async (newZoom: number) => {
+    setZoomLevel(newZoom);
+    try {
+      const track = streamRef.current?.getVideoTracks()[0];
+      if (track) {
+        const capabilities = (track.getCapabilities?.() || {}) as { zoom?: { min: number; max: number } };
+        if (capabilities.zoom) {
+          const clamped = Math.max(capabilities.zoom.min, Math.min(capabilities.zoom.max, newZoom));
+          await track.applyConstraints({
+            advanced: [{ zoom: clamped } as MediaTrackConstraintSet],
+          });
+        }
+      }
+    } catch {
+      // Hardware zoom unsupported; digital crop zoom handles it seamlessly!
+    }
+  };
+
   // Live direct pixel art rendering loop (30 FPS) with Zoom
   useEffect(() => {
     if (!isReady) {
@@ -201,15 +233,13 @@ export function CameraView({
     const video = videoRef.current;
     if (!video || !video.videoWidth || !video.videoHeight) return null;
 
-    // Use high resolution canvas with pixelated rendering
     const canvas = document.createElement("canvas");
     canvas.width = 1200;
     canvas.height = Math.round(1200 * (video.videoHeight / video.videoWidth));
     const ctx = canvas.getContext("2d");
     if (!ctx) return null;
 
-    // Zoom crop
-    const z = Math.max(1, zoomLevel);
+    const z = Math.max(0.5, zoomLevel);
     const cropW = video.videoWidth / z;
     const cropH = video.videoHeight / z;
     const cropX = (video.videoWidth - cropW) / 2;
@@ -236,11 +266,9 @@ export function CameraView({
       zoomLevel
     );
 
-    // Upscale crisp pixel blocks to full canvas
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(tempCanvas, 0, 0, canvas.width, canvas.height);
 
-    // Add vintage timestamp if enabled
     if (showDateStamp) {
       ctx.textAlign = "right";
       ctx.textBaseline = "bottom";
@@ -256,7 +284,6 @@ export function CameraView({
     return canvas.toDataURL("image/png", 0.95);
   }, [zoomLevel, facingMode, activePalette, showDateStamp, currentTimeText]);
 
-  // Trigger haptic vibration
   const triggerHaptic = (ms: number = 40) => {
     if (typeof window !== "undefined" && "vibrate" in navigator) {
       try {
@@ -267,7 +294,7 @@ export function CameraView({
     }
   };
 
-  // Helper to save a photo to iPhone Photos / share sheet or download
+  // Direct save to Camera Roll via iOS share sheet or download
   const saveImageFile = async (dataUrl: string) => {
     try {
       const res = await fetch(dataUrl);
@@ -295,7 +322,7 @@ export function CameraView({
         }
       }
 
-      // Laptop fallback: download directly
+      // Laptop / unsupported fallback: download image file directly
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -310,14 +337,13 @@ export function CameraView({
     }
   };
 
-  // Shutter action: handles both Single Photo mode and 4-Photo Strip mode
+  // Shutter action: handles Single Photo and 4-Photo Strip
   const handleShutterPress = async () => {
     if (isShooting || !isReady) return;
 
     setIsShooting(true);
     setShowMenu(false);
 
-    // Optional timer countdown (e.g. 3s or 5s)
     if (timerDuration > 0) {
       for (let count: number = timerDuration; count >= 1; count--) {
         setCountdown(count);
@@ -329,7 +355,7 @@ export function CameraView({
     }
 
     if (shootMode === "single") {
-      // SINGLE PHOTO MODE
+      // SINGLE PHOTO: Capture, update album, and direct save to camera roll
       if (flashEnabled) setIsFlashing(true);
       playShutterSound();
       triggerHaptic(60);
@@ -352,7 +378,6 @@ export function CameraView({
       for (let shot = 1; shot <= 4; shot++) {
         setCurrentShotIndex(shot);
 
-        // 3-2-1 countdown between shots
         for (let count = 3; count >= 1; count--) {
           setCountdown(count);
           playCountdownBeep(count === 1);
@@ -423,7 +448,23 @@ export function CameraView({
         </div>
       )}
 
-      {/* OFFSCREEN SOURCE VIDEO: Absolutely prevents Safari from showing native media player / pause overlay */}
+      {/* Safari Add to Home Screen hint banner (dismissible) */}
+      {showInstallBanner && (
+        <div className="w-full max-w-[390px] bg-neutral-900/90 border-b border-neutral-800 px-4 py-1.5 flex items-center justify-between text-[11px] font-mono text-neutral-300 z-40 shrink-0">
+          <span className="truncate">
+            📲 Tap <strong className="text-white">Share</strong> → <strong className="text-white">&quot;Add to Home Screen&quot;</strong> for Fullscreen App
+          </span>
+          <button
+            type="button"
+            onClick={() => setShowInstallBanner(false)}
+            className="text-neutral-500 hover:text-white px-2 py-0.5 ml-2 text-xs"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* OFFSCREEN SOURCE VIDEO: Prevents Safari native pause icon & fullscreen media controls */}
       <video
         ref={videoRef}
         playsInline
@@ -444,8 +485,8 @@ export function CameraView({
       />
 
       {/* TOP STATUS BAR (ProCCD style) */}
-      <header className="w-full max-w-[390px] flex items-center justify-between px-6 pt-safe pb-1 z-30 shrink-0">
-        {/* Settings Button */}
+      <header className="w-full max-w-[390px] flex items-center justify-between px-6 pt-safe pb-1 z-30 shrink-0 h-10">
+        {/* Settings / Filters Button */}
         <button
           type="button"
           onClick={() => setShowMenu((prev) => !prev)}
@@ -469,7 +510,7 @@ export function CameraView({
         </div>
       </header>
 
-      {/* POPUP FILTER DRAWER (When MENU or mini-camera is tapped) */}
+      {/* POPUP FILTER DRAWER */}
       {showMenu && (
         <div className="absolute inset-x-4 top-16 z-50 bg-neutral-900/95 border border-neutral-700/80 rounded-3xl p-5 shadow-2xl backdrop-blur-2xl animate-in fade-in zoom-in-95 max-w-sm mx-auto">
           <div className="flex items-center justify-between pb-3 border-b border-neutral-800 mb-3">
@@ -525,9 +566,9 @@ export function CameraView({
       )}
 
       {/* MAIN FRAMED LCD VIEWFINDER SCREEN (ProCCD style) */}
-      <div className="relative w-full max-w-[390px] flex-1 min-h-0 mx-auto px-4 flex items-center justify-center">
-        <div className="relative w-full h-full max-h-[56dvh] rounded-[28px] overflow-hidden bg-neutral-950 border border-neutral-800 shadow-[0_12px_40px_rgba(0,0,0,0.9),inset_0_1px_1px_rgba(255,255,255,0.1)] flex items-center justify-center">
-          {/* Live Pixel Art Viewfinder (Directly on screen with nearest-neighbor scaling) */}
+      <div className="relative w-full max-w-[370px] flex-1 min-h-0 mx-auto px-4 flex items-center justify-center py-1">
+        <div className="relative w-full h-full max-h-[52dvh] rounded-[26px] overflow-hidden bg-neutral-950 border border-neutral-800 shadow-[0_12px_40px_rgba(0,0,0,0.9),inset_0_1px_1px_rgba(255,255,255,0.1)] flex items-center justify-center">
+          {/* Live Pixel Art Viewfinder (Nearest-neighbor scaling, direct pixel stream) */}
           <canvas
             ref={pixelCanvasRef}
             className={`w-full h-full object-cover pixelated ${
@@ -582,20 +623,20 @@ export function CameraView({
             <span className="text-emerald-400 uppercase">{shootMode}</span>
           </div>
 
-          {/* LENS ZOOM IN / OUT BUTTONS (ProCCD style) */}
+          {/* LENS ZOOM IN / OUT BUTTONS ([0.5x], [1x], [2x], [3x]) */}
           <div className="absolute bottom-3 left-3 flex items-center gap-1 bg-black/60 backdrop-blur-md border border-white/15 p-1 rounded-full z-20">
-            {[1, 2, 3].map((z) => (
+            {[0.5, 1, 2, 3].map((z) => (
               <button
                 key={z}
                 type="button"
-                onClick={() => setZoomLevel(z)}
+                onClick={() => handleZoomChange(z)}
                 className={`w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-mono font-black transition-all active:scale-90 ${
                   zoomLevel === z
                     ? "bg-white text-black shadow-md scale-105"
                     : "text-white/70 hover:text-white"
                 }`}
               >
-                {z}x
+                {z === 0.5 ? ".5" : z}x
               </button>
             ))}
           </div>
@@ -615,7 +656,7 @@ export function CameraView({
       </div>
 
       {/* MIDDLE TOOLBAR STRIP (ProCCD style icon row) */}
-      <div className="w-full max-w-[390px] flex items-center justify-around px-4 py-2 shrink-0 text-white z-20">
+      <div className="w-full max-w-[370px] flex items-center justify-around px-4 py-1.5 shrink-0 text-white z-20">
         {/* Flash Toggle */}
         <button
           type="button"
@@ -637,7 +678,7 @@ export function CameraView({
           </svg>
         </button>
 
-        {/* Timer Toggle (Off -> 3s -> 5s) */}
+        {/* Timer Toggle */}
         <button
           type="button"
           onClick={() =>
@@ -679,7 +720,7 @@ export function CameraView({
           MENU
         </button>
 
-        {/* Shoot Mode Toggle (Single vs 4-Photo Strip) */}
+        {/* Shoot Mode Toggle */}
         <button
           type="button"
           onClick={() =>
@@ -714,7 +755,7 @@ export function CameraView({
       </div>
 
       {/* LOWER CAMERA DECK (ProCCD Shutter & Widget Deck) */}
-      <footer className="w-full max-w-[390px] flex flex-col items-center pb-safe px-6 gap-2 shrink-0 z-20">
+      <footer className="w-full max-w-[370px] flex flex-col items-center pb-safe px-5 gap-1.5 shrink-0 z-20">
         <div className="w-full flex items-center justify-between">
           {/* LEFT: Retro Point-and-Shoot Mini Camera Widget */}
           <div className="flex flex-col items-center">
@@ -743,7 +784,7 @@ export function CameraView({
               onClick={handleShutterPress}
               disabled={!isReady || isShooting}
               aria-label="Take Photo"
-              className={`relative w-[86px] h-[86px] rounded-full p-[4px] bg-gradient-to-b from-neutral-700 via-neutral-900 to-black shadow-[0_8px_25px_rgba(0,0,0,0.9),inset_0_1px_2px_rgba(255,255,255,0.25)] active:scale-95 transition-all duration-150 disabled:opacity-50 cursor-pointer ${
+              className={`relative w-[84px] h-[84px] rounded-full p-[4px] bg-gradient-to-b from-neutral-700 via-neutral-900 to-black shadow-[0_8px_25px_rgba(0,0,0,0.9),inset_0_1px_2px_rgba(255,255,255,0.25)] active:scale-95 transition-all duration-150 disabled:opacity-50 cursor-pointer ${
                 isShooting ? "scale-95" : ""
               }`}
             >
@@ -799,7 +840,7 @@ export function CameraView({
         </div>
 
         {/* BOTTOM MODE SWITCHER SLIDER (ProCCD style) */}
-        <div className="w-full flex items-center justify-center gap-3 pt-1">
+        <div className="w-full flex items-center justify-center gap-3 pt-0.5">
           <svg className="w-4 h-4 text-neutral-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <circle cx="12" cy="12" r="3" />
             <path strokeLinecap="round" strokeLinejoin="round" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />

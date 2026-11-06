@@ -1,35 +1,25 @@
 {
   "expo": {
-    "name": "ProCCD Pixel Camera",
-    "slug": "proccd-pixel",
+    "name": "mobile",
+    "slug": "mobile",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "dark",
-    "backgroundColor": "#000000",
+    "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": false,
-      "bundleIdentifier": "com.photobooth.proccd",
-      "infoPlist": {
-        "NSCameraUsageDescription": "ProCCD needs camera access to take retro pixel art photos.",
-        "NSPhotoLibraryUsageDescription": "ProCCD saves your photos directly to your Photos album.",
-        "NSPhotoLibraryAddUsageDescription": "ProCCD saves your photos directly to your Photos album."
-      }
+      "supportsTablet": true
     },
-    "plugins": [
-      [
-        "expo-camera",
-        {
-          "cameraPermission": "Allow ProCCD to access your camera."
-        }
-      ],
-      [
-        "expo-media-library",
-        {
-          "photosPermission": "Allow ProCCD to save photos directly to your album.",
-          "savePhotosPermission": "Allow ProCCD to save photos directly to your album."
-        }
-      ]
-    ]
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    }
   }
 }
