@@ -29,8 +29,8 @@ export function CameraView({
   const [isFlashing, setIsFlashing] = useState(false);
   const [activePalette, setActivePalette] = useState<PixelArtPalette>("z30");
   const [flashEnabled, setFlashEnabled] = useState(true);
-  const [timerDuration, setTimerDuration] = useState<0 | 3 | 5>(0);
-  const [shootMode, setShootMode] = useState<"single" | "strip">("strip");
+  const [timerDuration, setTimerDuration] = useState<0 | 3 | 10>(0);
+  const [shootMode, setShootMode] = useState<"photo" | "strip">("photo");
   const [showDateStamp, setShowDateStamp] = useState(true);
   const [showMenu, setShowMenu] = useState(false);
   const [showPhotoModal, setShowPhotoModal] = useState(false);
@@ -47,7 +47,7 @@ export function CameraView({
     setTimeout(() => setToastMessage(null), 2500);
   };
 
-  // Check if running inside Safari browser (not yet added to Home Screen)
+  // Check if opened inside mobile Safari
   useEffect(() => {
     if (typeof window !== "undefined") {
       const isStandalone =
@@ -73,7 +73,7 @@ export function CameraView({
 
       setCurrentTimeText({
         date: `${month}-${day}-${year}`,
-        time: `< ${displayHours}:${mins} ${ampm}`,
+        time: `<${displayHours}:${mins} ${ampm}`,
       });
     };
 
@@ -158,7 +158,7 @@ export function CameraView({
         }
       }
     } catch {
-      // Hardware zoom unsupported; digital crop zoom handles it seamlessly!
+      // Digital crop-zoom handles it seamlessly
     }
   };
 
@@ -274,7 +274,7 @@ export function CameraView({
       ctx.textBaseline = "bottom";
       ctx.fillStyle = "#f5eedb";
       ctx.font = "bold 34px monospace";
-      ctx.shadowColor = "rgba(0, 0, 0, 0.9)";
+      ctx.shadowColor = "rgba(0, 0, 0, 0.95)";
       ctx.shadowBlur = 8;
       ctx.fillText(currentTimeText.date, canvas.width - 35, canvas.height - 65);
       ctx.font = "bold 28px monospace";
@@ -322,7 +322,7 @@ export function CameraView({
         }
       }
 
-      // Laptop / unsupported fallback: download image file directly
+      // Fallback download
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -354,7 +354,7 @@ export function CameraView({
       setCountdown(null);
     }
 
-    if (shootMode === "single") {
+    if (shootMode === "photo") {
       // SINGLE PHOTO: Capture, update album, and direct save to camera roll
       if (flashEnabled) setIsFlashing(true);
       playShutterSound();
@@ -464,7 +464,7 @@ export function CameraView({
         </div>
       )}
 
-      {/* OFFSCREEN SOURCE VIDEO: Prevents Safari native pause icon & fullscreen media controls */}
+      {/* SOURCE VIDEO: Positioned behind the canvas with opacity 0 so WebKit decodes video frames without native controls */}
       <video
         ref={videoRef}
         playsInline
@@ -473,15 +473,7 @@ export function CameraView({
         controls={false}
         disablePictureInPicture
         disableRemotePlayback
-        style={{
-          position: "fixed",
-          top: "-9999px",
-          left: "-9999px",
-          width: "1px",
-          height: "1px",
-          opacity: 0,
-          pointerEvents: "none",
-        }}
+        className="absolute inset-0 w-full h-full object-cover pointer-events-none -z-10 opacity-0"
       />
 
       {/* TOP STATUS BAR (ProCCD style) */}
@@ -644,10 +636,10 @@ export function CameraView({
           {/* VINTAGE DIGITAL CAMERA TIMESTAMP (Bottom-Right inside LCD) */}
           {showDateStamp && (
             <div className="absolute bottom-3 right-3 text-right pointer-events-none select-none font-mono z-10 leading-none">
-              <div className="text-[13px] font-black text-[#f5eedb] tracking-wider drop-shadow-[0_2px_4px_rgba(0,0,0,0.95)]">
+              <div className="text-[14px] font-black text-[#f5eedb] tracking-wider drop-shadow-[0_2px_4px_rgba(0,0,0,0.95)]">
                 {currentTimeText.date}
               </div>
-              <div className="text-[10px] font-bold text-[#f5eedb]/90 tracking-wide mt-1 drop-shadow-[0_2px_4px_rgba(0,0,0,0.95)]">
+              <div className="text-[11px] font-bold text-[#f5eedb]/90 tracking-wide mt-1 drop-shadow-[0_2px_4px_rgba(0,0,0,0.95)]">
                 {currentTimeText.time}
               </div>
             </div>
@@ -682,7 +674,7 @@ export function CameraView({
         <button
           type="button"
           onClick={() =>
-            setTimerDuration((prev) => (prev === 0 ? 3 : prev === 3 ? 5 : 0))
+            setTimerDuration((prev) => (prev === 0 ? 3 : prev === 3 ? 10 : 0))
           }
           className="flex items-center gap-0.5 text-xs font-mono font-bold text-neutral-300 active:scale-90 transition-transform p-1.5"
           aria-label="Toggle Timer"
@@ -720,25 +712,24 @@ export function CameraView({
           MENU
         </button>
 
-        {/* Shoot Mode Toggle */}
+        {/* Film Negative Frame Icon [ : : ] */}
         <button
           type="button"
           onClick={() =>
-            setShootMode((prev) => (prev === "strip" ? "single" : "strip"))
+            setShootMode((prev) => (prev === "strip" ? "photo" : "strip"))
           }
           className={`flex items-center gap-1 p-1.5 rounded-lg border text-[10px] font-mono font-bold active:scale-90 transition-transform ${
             shootMode === "strip"
               ? "border-emerald-400 text-emerald-300 bg-emerald-500/10"
               : "border-neutral-700 text-neutral-400"
           }`}
-          title="Toggle Single Photo or 4-Photo Strip"
+          title="Toggle Strip / Single Mode"
         >
           <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
             <rect x="3" y="3" width="18" height="18" rx="2" />
             <line x1="9" y1="3" x2="9" y2="21" strokeDasharray="2 2" />
             <line x1="15" y1="3" x2="15" y2="21" strokeDasharray="2 2" />
           </svg>
-          <span>{shootMode === "strip" ? "STRIP" : "SINGLE"}</span>
         </button>
 
         {/* Date Stamp Toggle [D] */}
@@ -843,10 +834,10 @@ export function CameraView({
         <div className="w-full flex items-center justify-center gap-3 pt-0.5">
           <svg className="w-4 h-4 text-neutral-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <circle cx="12" cy="12" r="3" />
-            <path strokeLinecap="round" strokeLinejoin="round" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+            <path strokeLinecap="round" strokeLinejoin="round" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
           </svg>
           <div
-            onClick={() => setShootMode((prev) => (prev === "strip" ? "single" : "strip"))}
+            onClick={() => setShootMode((prev) => (prev === "strip" ? "photo" : "strip"))}
             className="w-32 h-6 rounded-full bg-neutral-900 border border-neutral-700 p-0.5 flex items-center cursor-pointer relative"
           >
             <div
